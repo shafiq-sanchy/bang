@@ -329,7 +329,7 @@ Text to convert: ${banglishText}`,
       <div className="border-t border-border bg-card/50 px-4 py-2 text-sm text-muted-foreground">
         <div className="flex items-center justify-between">
           <span>{banglishText.length} characters</span>
-          <span>TextGenie Pro</span>
+          <span>© 2025 Shafiq Sanchy</span>
         </div>
       </div>
 
