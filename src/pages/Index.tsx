@@ -22,56 +22,78 @@ const Index = () => {
   const [keysOpen, setKeysOpen] = useState(false);
   const [keysInput, setKeysInput] = useState("");
 
-  // Real-time conversion with grammar correction
+  // === নতুন ফাংশন: API কলের জন্য ===
+  const performConversion = async (textToConvert: string) => {
+    if (!textToConvert.trim()) {
+      setBengaliText("");
+      return;
+    }
+
+    setIsConverting(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("gemini-chat", {
+        body: {
+          prompt: `You are an expert Bengali translator and grammar corrector. Convert the following Banglish (Bengali written in English letters) text to proper Bengali script with correct grammar, proper word connections (সন্ধি), and accurate spelling. Ensure the output follows pure Bengali grammar rules and sentence structure. Only output the converted Bengali text, nothing else.
+
+Text to convert: ${textToConvert}`,
+          apiKeys: apiKeys.length ? apiKeys : undefined,
+        },
+      });
+
+      if (error) throw error;
+
+      if (data && data.text) {
+        setBengaliText(data.text.trim());
+      }
+    } catch (error) {
+      console.error("Conversion error:", error);
+      toast({
+        title: "Conversion failed",
+        description: "Please check if API keys are configured.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsConverting(false);
+    }
+  };
+
+  // === পরিবর্তিত useEffect: স্বয়ংক্রিয় কনভার্শনের জন্য ===
   useEffect(() => {
     if (!banglishText.trim()) {
       setBengaliText("");
       return;
     }
 
-    // Debounce the conversion to avoid too many API calls
+    // পুরনো টাইমার ক্লিয়ার করুন
     if (debounceTimer.current) {
       clearTimeout(debounceTimer.current);
     }
 
-    debounceTimer.current = setTimeout(async () => {
-      setIsConverting(true);
-      try {
-        const { data, error } = await supabase.functions.invoke("gemini-chat", {
-          body: {
-            prompt: `You are an expert Bengali translator and grammar corrector. Convert the following Banglish (Bengali written in English letters) text to proper Bengali script with correct grammar, proper word connections (সন্ধি), and accurate spelling. Ensure the output follows pure Bengali grammar rules and sentence structure. Only output the converted Bengali text, nothing else.
+    // ৫০০ মিলিসেকেন্ড পরে কনভার্ট করুন (আগে ছিল ১ সেকেন্ড)
+    debounceTimer.current = setTimeout(() => {
+      performConversion(banglishText);
+    }, 500); // দ্রুত রেসপন্সের জন্য সময় কমানো হয়েছে
 
-Text to convert: ${banglishText}`,
-            apiKeys: apiKeys.length ? apiKeys : undefined,
-          },
-        });
-
-        if (error) throw error;
-
-        if (data && data.text) {
-          setBengaliText(data.text.trim());
-        }
-      } catch (error) {
-        console.error("Conversion error:", error);
-        // Show error only if there's no text yet
-        if (!bengaliText) {
-          toast({
-            title: "Conversion failed",
-            description: "Please check if API keys are configured.",
-            variant: "destructive",
-          });
-        }
-      } finally {
-        setIsConverting(false);
-      }
-    }, 1000); // 1 second debounce
-
+    // কম্পোনেন্ট আনমাউন্ট হলে টাইমার ক্লিয়ার করুন
     return () => {
       if (debounceTimer.current) {
         clearTimeout(debounceTimer.current);
       }
     };
-  }, [banglishText]);
+  }, [banglishText]); // banglishText পরিবর্তন হলে এই ইফেক্ট চলবে
+
+  // === নতুন ফাংশন: স্পেস চাপলে তৎক্ষণাৎ কনভার্ট করার জন্য ===
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // চেক করুন, চাপা কীটি স্পেস কিনা
+    if (event.key === ' ') {
+      // যদি কোনো অপেক্ষমান টাইমার থাকে, তাহলে তা বাতিল করুন
+      if (debounceTimer.current) {
+        clearTimeout(debounceTimer.current);
+      }
+      // সঙ্গে সঙ্গে কনভার্শন শুরু করুন
+      performConversion(banglishText);
+    }
+  };
 
   const handleNew = () => {
     setBanglishText("");
@@ -92,7 +114,6 @@ Text to convert: ${banglishText}`,
       return;
     }
 
-    // Create a blob and download
     const blob = new Blob([bengaliText], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -177,37 +198,7 @@ Text to convert: ${banglishText}`,
       });
       return;
     }
-
-    setIsConverting(true);
-    try {
-      const { data, error } = await supabase.functions.invoke("gemini-chat", {
-        body: {
-          prompt: `You are an expert Bengali translator and grammar corrector. Convert the following Banglish (Bengali written in English letters) text to proper Bengali script with correct grammar, proper word connections (সন্ধি), and accurate spelling. Ensure the output follows pure Bengali grammar rules and sentence structure. Only output the converted Bengali text, nothing else.
-
-Text to convert: ${banglishText}`,
-          apiKeys: apiKeys.length ? apiKeys : undefined,
-        },
-      });
-
-      if (error) throw error;
-
-      if (data && data.text) {
-        setBengaliText(data.text.trim());
-        toast({
-          title: "Converted successfully!",
-          description: "Your text has been converted to Bengali.",
-        });
-      }
-    } catch (error) {
-      console.error("Conversion error:", error);
-      toast({
-        title: "Conversion failed",
-        description: "Please check if API keys are configured.",
-        variant: "destructive",
-      });
-    } finally {
-      setIsConverting(false);
-    }
+    performConversion(banglishText);
   };
 
   return (
@@ -306,7 +297,9 @@ Text to convert: ${banglishText}`,
             <TextEditor
               value={banglishText}
               onChange={setBanglishText}
-              placeholder="Type your Banglish text here..."
+              // === এখানে নতুন প্রপ যোগ করা হয়েছে ===
+              onKeyDown={handleKeyDown}
+              placeholder="Type your Banglish text here... (Press space for instant conversion)"
               fontSize={fontSize}
             />
           </div>
