@@ -9,47 +9,121 @@ import { useTheme } from "next-themes";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 
+// Utility to split text into words + spaces/newlines (preserves formatting)
+function tokenizeWithFormat(text: string): string[] {
+  return text.match(/([^\s\n]+)|(\s+|\n)/g) || [];
+}
+
 const Index = () => {
   const [banglishText, setBanglishText] = useState("");
-  const [bengaliText, setBengaliText] = useState("");
-  const [isConverting, setIsConverting] = useState(false);
+  const [bengaliTokens, setBengaliTokens] = useState<string[]>([]);
   const [fontSize, setFontSize] = useState(16);
   const [copied, setCopied] = useState(false);
   const { toast } = useToast();
   const { theme, setTheme } = useTheme();
-  const debounceTimer = useRef<NodeJS.Timeout | null>(null);
   const [apiKeys, setApiKeys] = useState<string[]>([]);
   const [keysOpen, setKeysOpen] = useState(false);
   const [keysInput, setKeysInput] = useState("");
+  const [isConverting, setIsConverting] = useState<boolean>(false);
+  const debounceTimer = useRef<NodeJS.Timeout | null>(null);
 
-  // Fast conversion: Convert the whole input in one batch, preserve format
-  const performConversion = async (textToConvert: string) => {
-    if (!textToConvert.trim()) {
-      setBengaliText("");
+  // Whenever text input changes, keep format-preserving token arrays updated
+  useEffect(() => {
+    const tokens = tokenizeWithFormat(banglishText);
+    setBengaliTokens((prev) => {
+      // Keep previous conversions for tokens, update length as needed
+      const updated = [...prev];
+      while (updated.length < tokens.length) updated.push("");
+      while (updated.length > tokens.length) updated.pop();
+      return updated;
+    });
+  }, [banglishText]);
+
+  // On space or enter, convert just the last word (fast, accurate, format preserved)
+  const handleKeyDown = async (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === " " || event.key === "Enter") {
+      const tokens = tokenizeWithFormat(banglishText);
+      if (!tokens.length) return;
+
+      // Find the last actual word (not whitespace/newline)
+      let lastWordIndex = -1;
+      for (let i = tokens.length - 1; i >= 0; i--) {
+        if (tokens[i].trim() !== "" && !/^\s+$/.test(tokens[i]) && tokens[i] !== "\n") {
+          lastWordIndex = i;
+          break;
+        }
+      }
+      if (lastWordIndex === -1) return;
+
+      setIsConverting(true);
+      try {
+        const { data, error } = await supabase.functions.invoke("gemini-chat", {
+          body: {
+            prompt: `Convert this Banglish word to Bengali, ONLY output the word:\n${tokens[lastWordIndex]}`,
+            apiKeys: apiKeys.length ? apiKeys : undefined,
+          },
+        });
+        if (error) throw error;
+
+        setBengaliTokens((prev) => {
+          const next = [...prev];
+          next[lastWordIndex] = data?.text ? data.text.trim() : tokens[lastWordIndex];
+          return next;
+        });
+      } catch {
+        toast({
+          title: "Conversion failed",
+          description: "Please check your API keys.",
+          variant: "destructive",
+        });
+      } finally {
+        setIsConverting(false);
+      }
+    }
+  };
+
+  // Handles TextEditor onChange so text and tokens stay in sync
+  const handleInputChange = (val: string) => {
+    setBanglishText(val);
+  };
+
+  // Quick convert button: batch converts all words (not spaces/newlines)
+  const handleConvert = async () => {
+    const tokens = tokenizeWithFormat(banglishText);
+    if (!tokens.length) {
+      toast({
+        title: "No text to convert",
+        description: "Please enter Banglish text.",
+        variant: "destructive",
+      });
       return;
     }
 
     setIsConverting(true);
     try {
-      const { data, error } = await supabase.functions.invoke("gemini-chat", {
-        body: {
-          prompt: `You are an expert Bengali translator and grammar corrector. Convert the following Banglish (Bengali written in English letters) text to proper Bengali script with correct grammar, proper word connections (সন্ধি), and accurate spelling. Ensure the output follows pure Bengali grammar rules and sentence structure. Only output the converted Bengali text, nothing else.
-
-Text to convert:
-${textToConvert}`,
-          apiKeys: apiKeys.length ? apiKeys : undefined,
-        },
-      });
-
-      if (error) throw error;
-      if (data && data.text) {
-        setBengaliText(data.text.trim());
+      const converted: string[] = [];
+      for (let i = 0; i < tokens.length; i++) {
+        if (tokens[i].trim() === "" || /^\s+$/.test(tokens[i]) || tokens[i] === "\n") {
+          converted.push(tokens[i]);
+        } else {
+          const { data, error } = await supabase.functions.invoke("gemini-chat", {
+            body: {
+              prompt: `Convert this Banglish word to Bengali, ONLY output the word:\n${tokens[i]}`,
+              apiKeys: apiKeys.length ? apiKeys : undefined,
+            },
+          });
+          if (error) {
+            converted.push(tokens[i]);
+          } else {
+            converted.push(data?.text ? data.text.trim() : tokens[i]);
+          }
+        }
       }
-    } catch (error) {
-      console.error("Conversion error:", error);
+      setBengaliTokens(converted);
+    } catch {
       toast({
         title: "Conversion failed",
-        description: "Please check if API keys are configured.",
+        description: "Please check your API keys.",
         variant: "destructive",
       });
     } finally {
@@ -57,30 +131,9 @@ ${textToConvert}`,
     }
   };
 
-  // Fast auto-convert on Banglish text change (debounced, single API call)
-  useEffect(() => {
-    if (!banglishText.trim()) {
-      setBengaliText("");
-      return;
-    }
-    if (debounceTimer.current) clearTimeout(debounceTimer.current);
-    debounceTimer.current = setTimeout(() => performConversion(banglishText), 500);
-    return () => {
-      if (debounceTimer.current) clearTimeout(debounceTimer.current);
-    };
-  }, [banglishText]);
-
-  // Convert instantly when space is pressed (optional UX boost)
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === ' ') {
-      if (debounceTimer.current) clearTimeout(debounceTimer.current);
-      performConversion(banglishText);
-    }
-  };
-
   const handleNew = () => {
     setBanglishText("");
-    setBengaliText("");
+    setBengaliTokens([]);
     toast({
       title: "New document",
       description: "Started with a blank document",
@@ -88,7 +141,8 @@ ${textToConvert}`,
   };
 
   const handleSave = () => {
-    if (!bengaliText.trim()) {
+    const fullText = bengaliTokens.join("");
+    if (!fullText.trim()) {
       toast({
         title: "Nothing to save",
         description: "Please convert some text first.",
@@ -96,7 +150,7 @@ ${textToConvert}`,
       });
       return;
     }
-    const blob = new Blob([bengaliText], { type: "text/plain;charset=utf-8" });
+    const blob = new Blob([fullText], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -151,9 +205,9 @@ ${textToConvert}`,
   };
 
   const handleCopy = async () => {
-    if (!bengaliText) return;
+    if (!bengaliTokens.length) return;
     try {
-      await navigator.clipboard.writeText(bengaliText);
+      await navigator.clipboard.writeText(bengaliTokens.join(""));
       setCopied(true);
       toast({
         title: "Copied!",
@@ -167,18 +221,6 @@ ${textToConvert}`,
         variant: "destructive",
       });
     }
-  };
-
-  const handleConvert = async () => {
-    if (!banglishText.trim()) {
-      toast({
-        title: "No text to convert",
-        description: "Please enter some Banglish text first.",
-        variant: "destructive",
-      });
-      return;
-    }
-    performConversion(banglishText);
   };
 
   return (
@@ -216,7 +258,7 @@ ${textToConvert}`,
               variant="outline" 
               size="sm" 
               onClick={handleCopy}
-              disabled={!bengaliText}
+              disabled={!bengaliTokens.length}
             >
               {copied ? (
                 <>
@@ -276,9 +318,9 @@ ${textToConvert}`,
           <div className="flex-1 p-4">
             <TextEditor
               value={banglishText}
-              onChange={setBanglishText}
+              onChange={handleInputChange}
               onKeyDown={handleKeyDown}
-              placeholder="Type your Banglish text here... (Press space for instant conversion)"
+              placeholder="Type your Banglish text here... (Press space or enter for instant word conversion)"
               fontSize={fontSize}
             />
           </div>
@@ -292,7 +334,7 @@ ${textToConvert}`,
             </h2>
           </div>
           <div className="flex-1 p-4">
-            <BengaliOutput text={bengaliText} fontSize={fontSize} />
+            <BengaliOutput text={bengaliTokens.join("")} fontSize={fontSize} />
           </div>
         </div>
       </div>
