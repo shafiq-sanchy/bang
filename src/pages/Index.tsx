@@ -9,6 +9,13 @@ import { useTheme } from "next-themes";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 
+/**
+ * Splits input text into words, whitespace and newlines, preserving their order.
+ */
+function splitByWordKeepFormat(text: string): (string | undefined)[] {
+  return text.match(/([^\s\n]+)|(\s+|\n)/g) || [];
+}
+
 const Index = () => {
   const [banglishText, setBanglishText] = useState("");
   const [bengaliText, setBengaliText] = useState("");
@@ -22,7 +29,10 @@ const Index = () => {
   const [keysOpen, setKeysOpen] = useState(false);
   const [keysInput, setKeysInput] = useState("");
 
-  // === নতুন ফাংশন: API কলের জন্য ===
+  /**
+   * Converts each word of the input Banglish text to Bengali, preserving formatting.
+   * This provides "real-time" word-by-word conversion.
+   */
   const performConversion = async (textToConvert: string) => {
     if (!textToConvert.trim()) {
       setBengaliText("");
@@ -31,20 +41,27 @@ const Index = () => {
 
     setIsConverting(true);
     try {
-      const { data, error } = await supabase.functions.invoke("gemini-chat", {
-        body: {
-          prompt: `You are an expert Bengali translator and grammar corrector. Convert the following Banglish (Bengali written in English letters) text to proper Bengali script with correct grammar, proper word connections (সন্ধি), and accurate spelling. Ensure the output follows pure Bengali grammar rules and sentence structure. Only output the converted Bengali text, nothing else.
+      // Split input into tokens that preserve formatting
+      const tokens = splitByWordKeepFormat(textToConvert);
 
-Text to convert: ${textToConvert}`,
-          apiKeys: apiKeys.length ? apiKeys : undefined,
-        },
-      });
-
-      if (error) throw error;
-
-      if (data && data.text) {
-        setBengaliText(data.text.trim());
+      // Convert only words; keep spaces/newlines as-is
+      const convertedTokens: string[] = [];
+      for (const token of tokens) {
+        if (token.trim().length === 0) {
+          convertedTokens.push(token); // whitespace/newline
+        } else {
+          // Convert word by invoking the API
+          const { data, error } = await supabase.functions.invoke("gemini-chat", {
+            body: {
+              prompt: `You are an expert Bengali translator and grammar corrector. Convert the following Banglish word to Bengali script ONLY, nothing else:\n\n${token}`,
+              apiKeys: apiKeys.length ? apiKeys : undefined,
+            },
+          });
+          if (error) throw error;
+          convertedTokens.push(data?.text ? data.text.trim() : token);
+        }
       }
+      setBengaliText(convertedTokens.join(""));
     } catch (error) {
       console.error("Conversion error:", error);
       toast({
@@ -57,40 +74,23 @@ Text to convert: ${textToConvert}`,
     }
   };
 
-  // === পরিবর্তিত useEffect: স্বয়ংক্রিয় কনভার্শনের জন্য ===
+  // Auto-convert on Banglish text change (debounced)
   useEffect(() => {
     if (!banglishText.trim()) {
       setBengaliText("");
       return;
     }
-
-    // পুরনো টাইমার ক্লিয়ার করুন
-    if (debounceTimer.current) {
-      clearTimeout(debounceTimer.current);
-    }
-
-    // ৫০০ মিলিসেকেন্ড পরে কনভার্ট করুন (আগে ছিল ১ সেকেন্ড)
-    debounceTimer.current = setTimeout(() => {
-      performConversion(banglishText);
-    }, 500); // দ্রুত রেসপন্সের জন্য সময় কমানো হয়েছে
-
-    // কম্পোনেন্ট আনমাউন্ট হলে টাইমার ক্লিয়ার করুন
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    debounceTimer.current = setTimeout(() => performConversion(banglishText), 500);
     return () => {
-      if (debounceTimer.current) {
-        clearTimeout(debounceTimer.current);
-      }
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
     };
-  }, [banglishText]); // banglishText পরিবর্তন হলে এই ইফেক্ট চলবে
+  }, [banglishText]);
 
-  // === নতুন ফাংশন: স্পেস চাপলে তৎক্ষণাৎ কনভার্ট করার জন্য ===
+  // Convert instantly when space is pressed
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // চেক করুন, চাপা কীটি স্পেস কিনা
     if (event.key === ' ') {
-      // যদি কোনো অপেক্ষমান টাইমার থাকে, তাহলে তা বাতিল করুন
-      if (debounceTimer.current) {
-        clearTimeout(debounceTimer.current);
-      }
-      // সঙ্গে সঙ্গে কনভার্শন শুরু করুন
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
       performConversion(banglishText);
     }
   };
@@ -113,7 +113,6 @@ Text to convert: ${textToConvert}`,
       });
       return;
     }
-
     const blob = new Blob([bengaliText], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -123,7 +122,6 @@ Text to convert: ${textToConvert}`,
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-
     toast({
       title: "Saved successfully!",
       description: "Your Bengali text has been downloaded.",
@@ -171,7 +169,6 @@ Text to convert: ${textToConvert}`,
 
   const handleCopy = async () => {
     if (!bengaliText) return;
-
     try {
       await navigator.clipboard.writeText(bengaliText);
       setCopied(true);
