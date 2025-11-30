@@ -8,9 +8,9 @@ const BengaliOutput = ({ text, fontSize = 16 }: BengaliOutputProps) => {
     <div className="flex flex-col h-full">
       <div className="flex-1 overflow-auto bg-transparent">
         {text ? (
-          <p 
+          <p
             className="leading-relaxed text-foreground font-['Noto_Sans_Bengali']"
-            style={{ fontSize: `${fontSize}px` }}
+            style={{ fontSize: `${fontSize}px`, whiteSpace: "pre-wrap" }}
           >
             {text}
           </p>
