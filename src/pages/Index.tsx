@@ -9,13 +9,6 @@ import { useTheme } from "next-themes";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 
-/**
- * Splits input text into words, whitespace and newlines, preserving their order.
- */
-function splitByWordKeepFormat(text: string): (string | undefined)[] {
-  return text.match(/([^\s\n]+)|(\s+|\n)/g) || [];
-}
-
 const Index = () => {
   const [banglishText, setBanglishText] = useState("");
   const [bengaliText, setBengaliText] = useState("");
@@ -29,10 +22,7 @@ const Index = () => {
   const [keysOpen, setKeysOpen] = useState(false);
   const [keysInput, setKeysInput] = useState("");
 
-  /**
-   * Converts each word of the input Banglish text to Bengali, preserving formatting.
-   * This provides "real-time" word-by-word conversion.
-   */
+  // Fast conversion: Convert the whole input in one batch, preserve format
   const performConversion = async (textToConvert: string) => {
     if (!textToConvert.trim()) {
       setBengaliText("");
@@ -41,27 +31,20 @@ const Index = () => {
 
     setIsConverting(true);
     try {
-      // Split input into tokens that preserve formatting
-      const tokens = splitByWordKeepFormat(textToConvert);
+      const { data, error } = await supabase.functions.invoke("gemini-chat", {
+        body: {
+          prompt: `You are an expert Bengali translator and grammar corrector. Convert the following Banglish (Bengali written in English letters) text to proper Bengali script with correct grammar, proper word connections (সন্ধি), and accurate spelling. Ensure the output follows pure Bengali grammar rules and sentence structure. Only output the converted Bengali text, nothing else.
 
-      // Convert only words; keep spaces/newlines as-is
-      const convertedTokens: string[] = [];
-      for (const token of tokens) {
-        if (token.trim().length === 0) {
-          convertedTokens.push(token); // whitespace/newline
-        } else {
-          // Convert word by invoking the API
-          const { data, error } = await supabase.functions.invoke("gemini-chat", {
-            body: {
-              prompt: `You are an expert Bengali translator and grammar corrector. Convert the following Banglish word to Bengali script ONLY, nothing else:\n\n${token}`,
-              apiKeys: apiKeys.length ? apiKeys : undefined,
-            },
-          });
-          if (error) throw error;
-          convertedTokens.push(data?.text ? data.text.trim() : token);
-        }
+Text to convert:
+${textToConvert}`,
+          apiKeys: apiKeys.length ? apiKeys : undefined,
+        },
+      });
+
+      if (error) throw error;
+      if (data && data.text) {
+        setBengaliText(data.text.trim());
       }
-      setBengaliText(convertedTokens.join(""));
     } catch (error) {
       console.error("Conversion error:", error);
       toast({
@@ -74,7 +57,7 @@ const Index = () => {
     }
   };
 
-  // Auto-convert on Banglish text change (debounced)
+  // Fast auto-convert on Banglish text change (debounced, single API call)
   useEffect(() => {
     if (!banglishText.trim()) {
       setBengaliText("");
@@ -87,7 +70,7 @@ const Index = () => {
     };
   }, [banglishText]);
 
-  // Convert instantly when space is pressed
+  // Convert instantly when space is pressed (optional UX boost)
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === ' ') {
       if (debounceTimer.current) clearTimeout(debounceTimer.current);
@@ -294,7 +277,6 @@ const Index = () => {
             <TextEditor
               value={banglishText}
               onChange={setBanglishText}
-              // === এখানে নতুন প্রপ যোগ করা হয়েছে ===
               onKeyDown={handleKeyDown}
               placeholder="Type your Banglish text here... (Press space for instant conversion)"
               fontSize={fontSize}
